@@ -1,0 +1,98 @@
+---
+title: "SCC transcriptomics-metabolomics"
+author: "Paul Stewart"
+date: "2022-10-13"
+output: pdf_document
+---
+
+```{r setup, include = FALSE}
+library(here)
+library(readxl)
+library(stringr)
+library(ConsensusClusterPlus)
+library(ComplexHeatmap)
+library(circlize)
+library(enrichR)
+library(immunedeconv)
+library(ggplot2)
+library(iClusterPlus)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+set.seed(2022)
+```
+
+Here I am reading in some data.
+
+```{r}
+transcript = read.delim("data/rnaseq_transcripts/RSEM.isoform.expected_count.txt", stringsAsFactors = FALSE)
+# do i match tp63?
+head(str_detect(transcript$GeneName, "TP63"))
+# how many match?
+table(str_detect(transcript$GeneName, "TP63"))
+# just get the tp63 from the transcript data frame
+transcript_tp63 = transcript[str_detect(transcript$GeneName, "TP63"), ]
+```
+
+I am reading in the patient meta data
+
+```{r}
+patient_meta = read.delim("data/abpp_metab/tmt_meta_up_to_proteomic_heatmaps_2019-10-10.txt", header = TRUE, stringsAsFactors = FALSE)
+```
+
+Plot a TP63 splice variant with the meta data table
+
+```{r}
+# look at just patient data
+# transcript_tp63[, patient_meta$GenomicsSample]
+# uh oh, the above gave an error; where is the problem?
+head(patient_meta$GenomicsSample)
+names(transcript_tp63) %in% patient_meta$GenomicsSample
+# here are the ones that do not match
+names(transcript_tp63)[!names(transcript_tp63) %in% patient_meta$GenomicsSample]
+# actually look at the flip since we care about what is in the patient meta table
+patient_meta$GenomicsSample[!patient_meta$GenomicsSample %in% names(transcript_tp63)]
+# turns out there mismatches because of the "redo" text
+```
+
+Add a new column to patient meta table
+
+```{r}
+patient_meta$GenomicsSampleSplicing = str_replace(patient_meta$GenomicsSample, "Redo", "")
+# did it work?
+length(patient_meta$GenomicsSampleSplicing[patient_meta$GenomicsSampleSplicing %in% names(transcript_tp63)])
+# hurray!
+# look at the table
+transcript_tp63[, patient_meta$GenomicsSampleSplicing]
+# make a boxplot the BAD way
+boxplot(as.numeric(transcript_tp63[3, patient_meta$GenomicsSampleSplicing]))
+
+row.names(transcript_tp63)
+# the row names are not very descriptive; lets fix this
+row.names(transcript_tp63) = transcript_tp63$GeneName
+row.names(transcript_tp63)
+
+transcript_tp63["TP63-203", patient_meta$GenomicsSampleSplicing]
+
+redox_patients = subset(patient_meta, subtype == "Redox")$GenomicsSampleSplicing
+inflamed_patients = subset(patient_meta, subtype == "Inflamed")$GenomicsSampleSplicing
+
+
+tp63_203_redox = log2(as.numeric(transcript_tp63["TP63-203", redox_patients]))
+tp63_203_inflamed = log2(as.numeric(transcript_tp63["TP63-203", inflamed_patients]))
+# these are not so helpful separately; do them together with a list
+boxplot(list("Inflamed_TP63203" = tp63_203_inflamed, "Redox_TP63203" = tp63_203_redox))
+# for ashley to do:
+# for (i in 1:nrow(transcript_tp63)) {
+# 	tp63_redox = log2(as.numeric(transcript_tp63[i, redox_patients]))
+# tp63_inflamed = log2(as.numeric(transcript_tp63[i, inflamed_patients]))
+# t.test()
+# }
+
+
+```
+
+
