@@ -1,0 +1,569 @@
+---
+title: "CCLE_LUSC_Limma"
+author: "AL"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#Load libraries and setwd
+library(here)
+library(readxl)
+library(stringr)
+library(ConsensusClusterPlus)
+library(ComplexHeatmap)
+library(circlize)
+library(enrichR)
+library(immunedeconv)
+library(ggplot2)
+library(iClusterPlus)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+set.seed(2022)
+
+getwd()
+```
+
+#load files - LARGE RNAseq files - dont run unless necessary
+```{r}
+#transcript level data - RNAseq transcript tpm data using RSEM. Log2 transformed, using a pseudo-count of 1
+CCLEtranscript = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_RNAseq_transcripts.csv", stringsAsFactors = FALSE)
+dim(CCLEtranscript) #1406 x 227663
+head(CCLEtranscript)
+
+#GENE LEVEL DATA (TPM gene expression data for all genes using RSEM. Log2 transformed, using a pseudo-count of 1)
+#Rows: cell lines (Broad IDs) and Columns: genes (HGNC symbol and Ensembl ID)
+CCLE_ExpFull_RNAseq = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_expression_full.csv", stringsAsFactors = FALSE, check.names=FALSE, header=TRUE, row.names=1)
+dim(CCLE_ExpFull_RNAseq) #1406 x 53970 
+
+
+#RNAseq_reads (RSEM) Rows: cell lines (Broad IDs) and Columns: genes (HGNC symbol and Ensembl ID)
+CCLE_RNAseq_reads = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_RNAseq_reads.csv", header=TRUE, stringsAsFactors = FALSE, row.names = 1 )
+dim(CCLE_RNAseq_reads) #1406 54357
+head(CCLE_RNAseq_reads)
+
+```
+#make CCLE dataframe
+```{r}
+RNASEQ = CCLE_RNAseq_reads #insert which RNAseq csv you want to use
+head(RNASEQ)
+
+#cells of interest that are classified as squamous lung 
+LUSC = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_samplesbytype/allprimarylung_NSCLC_LUSC.csv")
+head(LUSC)
+
+cellsOfInterest = LUSC$DepMap_ID #make vector of cells of interest by Depmap ID#
+cellsOfInterest
+
+MatchedCells = cellsOfInterest %in% row.names(RNASEQ)
+table(MatchedCells) #2 false and 13 true
+
+notMatchedCells = !cellsOfInterest %in% row.names(RNASEQ)
+notMatchedCells
+table(MatchedCells)
+
+#identify which cell lines were not matched
+cellsOfInterest[notMatchedCells] #"ACH-001078" "ACH-001234"
+
+
+#Move forward with only matched cells - note making a new table using subset function but with all gene transcripts from original
+MatchedCellsTable = subset(RNASEQ, row.names(RNASEQ) %in% cellsOfInterest)
+head(MatchedCellsTable)
+dim(MatchedCellsTable) #13x 54357
+
+#get genes in CCLEtranscript from the MatchedCell subset
+CCLEtranscript_colnames = colnames(MatchedCells)
+length(CCLEtranscript_colnames)
+CCLEtranscript_colnames[1:5]
+
+#removed all characters after . in names
+names(RNASEQ) = str_replace(names(CCLE_RNAseq_reads), "\\.\\..*", "")
+#\\. look at dot then do it twice then last . is for replacing with a wildcard then add * to repeat until the end
+
+
+```
+
+```{r}
+#gene level data just in case
+
+cellsOfInterest
+#currently looking at LUSC cells of interest
+length(cellsOfInterest) #15
+
+
+#CCLE_expression_full.csv (tpm data)
+CCLE_ExpFull_RNAseq[1:5,1:5]
+dim(CCLE_ExpFull_RNAseq)
+#  1406 53970 and genes are columns and depmap ID/cells are rows under column name X
+
+
+dim(MatchedCellsTable)
+
+
+compare = cellsOfInterest %in% row.names(CCLE_ExpFull_RNAseq)
+table(compare) #still 2 false 13 true
+#false 2 and true 13
+
+
+#move forward with only matched cells
+CCLE_ExpFull_RNAseq_subset = subset(RNASEQ, row.names(RNASEQ) %in% cellsOfInterest)
+dim(CCLE_ExpFull_RNAseq_subset)
+#see 13 rows and 54357 columns
+head(CCLE_ExpFull_RNAseq_subset)
+
+hist(apply(RNASEQ,1, max))
+
+#get genes in CCLE_ExpFull_RNAseq THIS IS TPM
+#CCLE_colnames = colnames(CCLE_ExpFull_RNAseq)
+#length(CCLE_colnames)
+#CCLE_colnames[1:5]
+
+#removed all characters after . in names
+#CCLE_colnames = gsub("\\(.*","",CCLE_colnames)
+#CCLE_colnames[1:5]
+
+#reapply colnames
+#CCLE_ExpFull_RNAseq_subset_NoNums=CCLE_ExpFull_RNAseq
+#colnames(CCLE_ExpFull_RNAseq_subset_NoNums) = CCLE_colnames
+#head(CCLE_ExpFull_RNAseq_subset_NoNums)
+#dim(CCLE_ExpFull_RNAseq_subset_NoNums) #13 53970
+```
+
+#CCLE_RNAseq_reads data
+```{r}
+dim(CCLE_RNAseq_reads) #1406 54357
+head(CCLE_RNAseq_reads)
+
+hist(apply(CCLE_RNAseq_reads,1, max))
+#counts should be in the thousands to millions - SO GOOD
+
+names(CCLE_RNAseq_reads) = str_replace(names(CCLE_RNAseq_reads), "\\.\\..*", "")
+names(CCLE_RNAseq_reads)[1:5]
+head(CCLE_RNAseq_reads)
+```
+
+#DEGs -- generate redox vs primitive group
+
+```{r}
+#CCLE transcript level data - CCLEtranscript_RNAseq_subset_NoNums
+#CCLE gene level data - CCLE_ExpFull_RNAseq_subset_NoNums
+
+library(limma) 
+library(edgeR) 
+
+CCLE_LUSC_meta = read.csv("~/Documents/Project_LUSC/ExportsAndGraphs/CCLE_RNAseq/Tibbles/CCLE_LUSC_meta.csv") #meta sample file
+CCLE_LUSC_meta #only has classifier right now
+
+
+head(CCLE_ExpFull_RNAseq_subset) #colnames are genes and row names are cells of interest
+head(MatchedCellsTable)
+head(RNASEQ) #all these three are the same
+counts = t(MatchedCellsTable) #transform so genes are row names and cells are column
+dim(counts) #54357 13
+hist(apply(counts,1, max)) #NOT SURE OF THIS GRAPH
+
+#instead of separating into two df add a meta file for group info
+
+LUSC_classical = c("ACH-001113", "ACH-000705", "ACH-000585", "ACH-000390")
+LUSC_classical
+
+row.names(RNASEQ)
+table(row.names(RNASEQ) %in% LUSC_classical)
+
+LUSC_classical = subset(RNASEQ, row.names(RNASEQ) %in% LUSC_classical)
+head(LUSC_classical)
+dim(LUSC_classical) # 4 54357
+
+#LUSC_notClassical = subset(RNASEQ, !row.names(RNASEQ) %in% LUSC_classical)
+#dim(LUSC_notClassical) # 1406 54357
+
+notClassical = !cellsOfInterest %in% row.names(LUSC_classical)
+notClassical
+
+LUSC_notClassical = cellsOfInterest[notClassical]
+LUSC_notClassical
+LUSC_notClassical = subset(RNASEQ, row.names(RNASEQ) %in% LUSC_notClassical)
+dim(LUSC_notClassical) # 9 54357
+
+```
+
+#put into DGEList
+```{r}
+head(counts)
+dim(counts) #54357    13
+DGELUSC_CCLE = DGEList(counts, lib.size = colSums(counts), 
+        norm.factors = rep(1,ncol(counts)), samples = NULL, group = colnames(counts), genes = NULL, remove.zeros = FALSE)
+head(DGELUSC_CCLE)
+
+#add group descriptor to the list
+DGELUSC_CCLE$samples$group = CCLE_LUSC_meta$wilkerson_classifier
+DGELUSC_CCLE
+
+
+
+```
+
+
+```{r, echo = FALSE}
+# TMM normalization
+
+DGELUSC_CCLE = calcNormFactors(DGELUSC_CCLE, method = "TMM")
+DGELUSC_CCLE
+
+
+#remove lowly expresssed genes
+#table(rowSums(DGELUSC_CCLE$counts==0)==9)
+# FALSE 52110 and  TRUE 1860 
+
+keep.exprs <- filterByExpr(DGELUSC_CCLE, group=DGELUSC_CCLE$samples$group)
+table(keep.exprs) #false 33060 and true 21297
+
+DGELUSC_CCLE_filtered <- DGELUSC_CCLE[keep.exprs,, keep.lib.sizes=FALSE]
+dim(DGELUSC_CCLE_filtered) #21297 x 13
+head(DGELUSC_CCLE_filtered$counts)
+```
+
+
+
+```{r, echo = FALSE}
+# ovyrs group design
+?model.matrix
+DGELUSC_CCLE
+DGELUSC_CCLE$design = model.matrix(~DGELUSC_CCLE$samples$group)
+DGELUSC_CCLE
+
+
+```
+
+#Voom differential expression using Limma
+
+```{r, echo = FALSE, fig.width = 6, fig.height = 4}
+DGELUSC_CCLE_voomed = voom(DGELUSC_CCLE, design = DGELUSC_CCLE$design, plot = TRUE)
+
+library(ggbiplot)
+rnaseq_pca = prcomp(t(DGELUSC_CCLE_voomed$E), center = TRUE, scale = TRUE)
+head(rnaseq_pca)
+
+labels = colnames(rnaseq_pca$sd)
+rnaseq_pca$x
+
+
+ggbiplot(rnaseq_pca, obs.scale = 1, var.scale = 1, labels = rownames(rnaseq_pca$x),
+         ellipse = FALSE, circle = TRUE, var.axes = FALSE, groups = DGELUSC_CCLE$samples$group) +
+    geom_point(aes(color = DGELUSC_CCLE$samples$group), size = 3, alpha = 0.5) +
+    scale_color_discrete(name = '') +
+    theme(legend.direction = 'horizontal', legend.position = 'top')
+    
+
+
+
+```
+#Voom fit generate Bayes table
+```{r, echo = FALSE}
+DGELUSC_CCLE_voomed_vfit = lmFit(DGELUSC_CCLE_voomed, DGELUSC_CCLE_voomed$design)
+DGELUSC_CCLE_voomed_efit = eBayes(DGELUSC_CCLE_voomed_vfit)
+# ovyrs_group_ebayes_results_table = topTable(ovyrs_group_dge_efit, number = nrow(ovyrs_group_dge_voomed$E)) 
+DGELUSC_CCLE_ebayes_results_table = topTable(DGELUSC_CCLE_voomed_efit, number = nrow(DGELUSC_CCLE_voomed$E), coef = 2)
+
+
+head(DGELUSC_CCLE_ebayes_results_table)
+
+write.csv(DGELUSC_CCLE_ebayes_results_table, "~/Documents/Rstudio/LUSC/graphs/CCLE_RNAseq_voomTable.csv")
+#nrow(subset(ovyrs_group_ebayes_results_table, adj.P.Val <= 0.1))
+
+
+#look at adj.P.Val <0.05 -- goal is dozens to hundreds of genes
+# put into enrichR then 
+```
+```{r}
+
+increasing = subset(DGELUSC_CCLE$counts[row.names(DGELUSC_CCLE_top7_hits),])
+write.csv(increasing, "~/Documents/Rstudio/LUSC/graphs/top6increasing.csv")
+
+decreasing = subset(DGELUSC_CCLE$counts[row.names(CCLE_sig_up),])
+decreasing
+write.csv(decreasing, "~/Documents/Rstudio/LUSC/graphs/top6decreasing.csv")
+
+DGELUSC_CCLE[1,]
+```
+
+#Top limma results; p-value distribution
+
+```{r, echo = FALSE}
+head(DGELUSC_CCLE_ebayes_results_table)
+hist = hist(DGELUSC_CCLE_ebayes_results_table$P.Value, breaks = 25, xlab = "P-value", main = "",  ylab = "Frequency")
+
+
+dim(subset(DGELUSC_CCLE_ebayes_results_table, logFC <= -1  & adj.P.Val <= 0.05)) #66 by 6
+row.names(subset(DGELUSC_CCLE_ebayes_results_table, logFC <= -1  & adj.P.Val <= 0.05))
+CCLE_sig_down = subset(subset(DGELUSC_CCLE_ebayes_results_table, logFC <= -1  & adj.P.Val <= 0.05))
+dim(CCLE_sig_down) #66 x 6
+write.csv(CCLE_sig_down, "~/Documents/Rstudio/LUSC/graphs/CCLE_Down_significantgenes.csv")
+
+
+CCLE_sig_up = subset(subset(DGELUSC_CCLE_ebayes_results_table, logFC >= 1  & adj.P.Val <= 0.05))
+dim(CCLE_sig_up) #7 x 6
+write.csv(CCLE_sig_up, "~/Documents/Rstudio/LUSC/graphs/CCLE_up_significantgenes.csv")
+row.names(subset(DGELUSC_CCLE_ebayes_results_table, logFC >= 1  & adj.P.Val <= 0.05))
+paste0(row.names(subset(DGELUSC_CCLE_ebayes_results_table, logFC >= 1  & adj.P.Val <= 0.05)), collapse = ",")
+
+paste0(row.names(subset(DGELUSC_CCLE_ebayes_results_table, logFC <= 0  & adj.P.Val <= 0.05)), collapse = ",")
+
+
+
+
+#volcano plot
+plot(DGELUSC_CCLE_ebayes_results_table$logFC, -log10(DGELUSC_CCLE_ebayes_results_table$P.Value))
+
+# write.table(ovyrs_group_ebayes_results_table, "work/ovyrs_group_ebayes_results_table_2020-08-31.txt", sep = "\t", quote = F, row.names = F)
+
+head(DGELUSC_CCLE_ebayes_results_table)
+DGELUSC_CCLE_ebayes_results_table2 = DGELUSC_CCLE_ebayes_results_table
+DGELUSC_CCLE_ebayes_results_table2 = mutate(DGELUSC_CCLE_ebayes_results_table2, neglog10pvalue = -log10(P.Value))
+head(DGELUSC_CCLE_ebayes_results_table2)
+
+library(RColorBrewer)
+library(ggrepel)
+
+ggplot(data = DGELUSC_CCLE_ebayes_results_table2, aes (x = logFC, y = neglog10pvalue)) +
+  geom_vline(xintercept = c(-2, 2), linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), linetype = 'dashed') + 
+  geom_point()
+  
+
+```
+
+Plots of top hits if they exist
+
+```{r, echo = FALSE, include = FALSE}
+head(DGELUSC_CCLE_ebayes_results_table)
+DGELUSC_CCLE_top6_hits = DGELUSC_CCLE_ebayes_results_table[1:6, ]
+DGELUSC_CCLE_top6_hits
+
+head(DGELUSC_CCLE_voomed$E)
+DGELUSC_CCLE_top6_hits_df = DGELUSC_CCLE_voomed$E[row.names(DGELUSC_CCLE_top6_hits), ]
+
+DGELUSC_CCLE_top7_hits = DGELUSC_CCLE_ebayes_results_table[1:7, ]
+DGELUSC_CCLE_top7_hits
+
+dim(DGELUSC_CCLE_ebayes_results_table) 
+
+par(mfrow = c(2,3))
+for (i in 1:nrow(DGELUSC_CCLE_top6_hits_df)) {
+  boxplot(row.name(DGELUSC_CCLE_top6_hits)[i]
+          }
+
+boxplot(list(quartile1 = ovyrs_group_top6_hits_df[ovyrs_group_top6_hits$GencodeID[i], quartile1_patients], quartile2 = ovyrs_group_top6_hits_df[ovyrs_group_top6_hits$GencodeID[i], quartile2_patients], quartile3 = ovyrs_group_top6_hits_df[ovyrs_group_top6_hits$GencodeID[i], quartile3_patients], quartile4 = ovyrs_group_top6_hits_df[ovyrs_group_top6_hits$GencodeID[i], quartile4_patients]), ylab = "Normalized Expression", main = ovyrs_group_top6_hits$GeneName[i], names = c("Q1", "Q2", "Q3", "Q4"))
+
+```
+
+
+Plot top hits in heatmap (padj < 0.1)
+
+```{r, echo = FALSE, fig.width = 10, fig.height = 6, warning = FALSE, message = FALSE}
+# gene heatmap ----
+
+DGELUSC_CCLE_heatmap_genes = subset(DGELUSC_CCLE_ebayes_results_table, adj.P.Val <= 0.1)
+DGELUSC_CCLE_heatmap_df = DGELUSC_CCLE_voomed$E[row.names(DGELUSC_CCLE_heatmap_genes), ]
+
+DGELUSC_CCLE_heatmap_df_transform = as.matrix(t(scale(t(DGELUSC_CCLE_heatmap_df), scale = TRUE, center = TRUE)))
+head(DGELUSC_CCLE_heatmap_df_transform)
+dim(DGELUSC_CCLE_heatmap_df_transform)
+#row.names(DGELUSC_CCLE_heatmap_df_transform) = row.names(DGELUSC_CCLE_heatmap_genes)
+
+library(ggbiplot)
+# range(clinical_meta_ovyrs$ovyrs)
+DGELUSC_CCLE_col = colorRamp2(c(12, 32, 52), c("white", "lightblue", "darkblue"))
+
+?HeatmapAnnotation
+#column_anno = HeatmapAnnotation(
+    #ovyrs = clinical_meta_ovyrs$ovyrs,
+    #col = list("ovyrs" = DGELUSC_CCLE_col)
+)
+
+# create heatmap and draw
+gene_heatmap = Heatmap(DGELUSC_CCLE_heatmap_df_transform, cluster_columns = TRUE, cluster_rows = TRUE, row_title = "Gene Expression", column_title = "CCLE Cell lines", name = "Z-score", heatmap_legend_param = list(title_position = "topcenter", legend_direction = "vertical"), show_row_names = FALSE, row_names_gp = gpar(fontsize = 8), show_column_names = FALSE)
+# draw(gene_heatmap, heatmap_legend_side = "right", annotation_legend_side = "right", merge_legend = TRUE)
+gene_heatmap
+
+
+head(DGELUSC_CCLE_heatmap_df_transform)
+
+
+```
+
+\newpage
+### Gene set enrichment analysis (Hallmarks of Cancer, Reactome, KEGG)
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+## gsea
+ovyrs_cont_gsea_ranks = -log10(ovyrs_cont_ebayes_results_table$P.Value)
+names(ovyrs_cont_gsea_ranks) = ovyrs_cont_ebayes_results_table$GeneName
+```
+
+Hallmarks
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+ovyrs_cont_hallmarks = as.data.frame(fgsea(hallmarks, ovyrs_cont_gsea_ranks, minSize = 15, maxSize = 500, scoreType = "pos"))
+ovyrs_cont_hallmarks_top10 = head(ovyrs_cont_hallmarks[order(ovyrs_cont_hallmarks$padj), ], 10)
+plotGseaTable(hallmarks[ovyrs_cont_hallmarks_top10$pathway], ovyrs_cont_gsea_ranks, ovyrs_cont_hallmarks)
+```
+
+\newpage
+Reactome
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+ovyrs_cont_reactome = as.data.frame(fgsea(reactome, ovyrs_cont_gsea_ranks, minSize = 15, maxSize = 500, scoreType = "pos"))
+ovyrs_cont_reactome_top10 = head(ovyrs_cont_reactome[order(ovyrs_cont_reactome$padj), ], 10)
+plotGseaTable(reactome[ovyrs_cont_reactome_top10$pathway], ovyrs_cont_gsea_ranks, ovyrs_cont_reactome)
+```
+
+\newpage
+KEGG
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+ovyrs_cont_kegg = as.data.frame(fgsea(kegg, ovyrs_cont_gsea_ranks, minSize = 15, maxSize = 500, scoreType = "pos"))
+ovyrs_cont_kegg_top10 = head(ovyrs_cont_kegg[order(ovyrs_cont_kegg$padj), ], 10)
+plotGseaTable(kegg[ovyrs_cont_kegg_top10$pathway], ovyrs_cont_gsea_ranks, ovyrs_cont_kegg)
+```
+
+Saving limma topTable (file name is endpoint_covariate1+covariate2+..._date) to 
+
+`ovyrs_cont_birthDecade+agedx+cohort_2020-10-23.csv` 
+ 
+standard errors to 
+ 
+`ovyrs_cont_ebayes_SE_2020-10-23.csv` 
+
+GSEA Hallmark results to 
+
+`ovyrs_cont_hallmarks_2020-10-23.csv`
+
+and GSEA Reactome results to 
+
+`ovyrGroup_reactome_2020-10-23.csv`
+
+and GSEA KEGG results to 
+
+`ovyrGroup_kegg_2020-10-23.csv`
+
+
+
+```{r, echo = FALSE}
+ovyrs_cont_hallmarks$leadingEdge = unlist(lapply(ovyrs_cont_hallmarks$leadingEdge, function(x) {
+    unlisted_strip = str_replace_all(x, fixed("\""), "")
+    unlisted_strip = str_replace_all(unlisted_strip, "c\\(|\\)|\\\n", "")
+    paste(unlisted_strip, collapse = ",")
+}))
+
+ovyrs_cont_reactome$leadingEdge = unlist(lapply(ovyrs_cont_reactome$leadingEdge, function(x) {
+    unlisted_strip = str_replace_all(x, fixed("\""), "")
+    unlisted_strip = str_replace_all(unlisted_strip, "c\\(|\\)|\\\n", "")
+    paste(unlisted_strip, collapse = ",")
+}))
+
+ovyrs_cont_kegg$leadingEdge = unlist(lapply(ovyrs_cont_kegg$leadingEdge, function(x) {
+    unlisted_strip = str_replace_all(x, fixed("\""), "")
+    unlisted_strip = str_replace_all(unlisted_strip, "c\\(|\\)|\\\n", "")
+    paste(unlisted_strip, collapse = ",")
+}))
+
+```
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+write.table(ovyrs_cont_ebayes_results_table, "work/ovyrs_cont_birthDecade+agedx+cohort_2020-10-23.csv", row.names = FALSE, sep = ",", quote = T)
+ovyrs_cont_se = sqrt(ovyrs_cont_dge_efit$s2.post) * ovyrs_cont_dge_efit$stdev.unscaled
+write.table(ovyrs_cont_se, "work/ovyrs_cont_ebayes_SE_2020-10-23.csv", row.names = TRUE, sep = ",", quote = T)
+
+write.table(ovyrs_cont_hallmarks, "work/ovyrs_cont_hallmarks_2020-10-23.csv", row.names = F, sep = ",", quote = T)
+write.table(ovyrs_cont_reactome, "work/ovyrs_cont_reactome_2020-10-23.csv", row.names = F, sep = ",", quote = T)
+write.table(ovyrs_cont_kegg, "work/ovyrs_cont_kegg_2020-10-23.csv", row.names = F, sep = ",", quote = T)
+```
+
+
+
+
+
+
+
+#Old DESeq code
+```{r}
+CN <- round(CCLEtranscript, digits=0)
+
+df <- CN
+
+
+### Check the distribution
+par(mfrow = c(2,2), mar = c(4,4,1,1))
+print( apply(df, 2, function(x) quantile(as.numeric(x))) )
+log1 <- apply(df, 2, function(x) {hist(log2(x), breaks = 100)})
+
+
+idExp <- apply(df, 1, function(x) any(x > 16))
+dfExp <- df[idExp, ]
+print(dim(dfExp))
+
+library('DESeq2')
+
+table2 <- data.frame(name = colnames(dfExp),
+                     condition = CCLE_LUSC_meta$wilkerson_classifier)
+dds <- DESeqDataSetFromMatrix(dfExp, 
+                              colData=table2, design= ~ condition)
+dds <- DESeq(dds)
+
+norCounts <- counts(dds, normalized=TRUE)
+
+res <- results(dds)
+
+head(res)
+print(res)
+writexl(res, "")
+
+## extract the genes with adjP < 0.0001
+resSig = res[ which(res$padj < 0.01), ]
+dim(resSig)
+
+sigNorData <- norCounts[which(res$padj < 0.01),]
+
+library(RColorBrewer)
+library(gplots)
+library(ggplot2)
+hmcol =  colorRampPalette(brewer.pal(9, "GnBu"))(100)
+
+
+heatMapDF_nor <- t( apply(sigNorData, 1, function(x){(x-mean(x))/sd(x)}) )
+
+colnames(heatMapDF_nor) <- c('Young_1','Young_2','Young_3','Young_4',
+                             'Aged_1','Aged_2','Aged_3','Aged_4',
+                             'AgedNPC86_1','AgedNPC86_2','AgedNPC86_3','AgedNPC86_4')
+
+p <- heatmap.2(heatMapDF_nor, col = hmcol, trace="none", margin=c(10, 10),labRow = F)
+
+heatmap.2(heatMapDF_nor, Rowv=T, Colv=FALSE, dendrogram ="row", #scale ="row", col = col,
+          density.info="none", trace="none", margins = c(10,10))
+pdf('heatmap.pdf')
+p
+# to find how many with fold change greater than 1 or less than -1
+
+length(which(resSig$log2FoldChange > 1))
+length(which(resSig$log2FoldChange < -1))
+
+
+res_plot      <- data.frame( res )
+res_plot$col  <- 'gray40'
+res_plot$col[res_plot$log2FoldChange > 1 & res_plot$padj < 0.01] <- 'red'
+res_plot$col[res_plot$log2FoldChange < -1 & res_plot$padj < 0.01] <- 'cornflowerblue'
+
+plot(res_plot$log2FoldChange,
+     -log10(res_plot$padj),
+     col = res_plot$col, pch = 19, xlab = 'log2(fold change)',
+     ylab = '-log10(p-adj)', 
+     las = 1 # the direction of ylab will be change
+)
+
+
+```
