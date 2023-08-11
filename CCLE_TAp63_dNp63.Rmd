@@ -5,28 +5,21 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
 #Load libraries and setwd
 library(here)
 library(readxl)
 library(stringr)
-library(ConsensusClusterPlus)
+#library(ConsensusClusterPlus)
 library(ComplexHeatmap)
 library(circlize)
 library(enrichR)
-library(immunedeconv)
+#library(immunedeconv)
 library(ggplot2)
-library(iClusterPlus)
+#library(iClusterPlus)
 library(dplyr)
 library(tidyr)
 library(reshape2)
@@ -42,222 +35,179 @@ getwd()
 ## Load files
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
 
-```{r pressure, echo=FALSE}
-#do once - did not repeat because loading data takes too long
-#read in RNAseq info takes a long time to load
-CCLEtranscript = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_RNAseq_transcripts.csv", stringsAsFactors = FALSE)
+```{r load files, echo = FALSE}
+#RNAseq data
+CCLEtranscript = read.csv("~/Documents/CCLE_LUSC/Resources/CCLE_RNAseq_transcripts.csv", stringsAsFactors = FALSE)
+head(CCLEtranscript)
+
+
+#p63 transcripts matched to ENSEMBL IDs
+TP63transcriptsisoform_identifiers = read.csv("~/Documents/CCLE_LUSC/Resources/Transcripts_p63Ntermtype.csv", stringsAsFactors = FALSE)
+TP63transcriptsisoform_identifiers
+
+
+#sample info
+sample_meta = read.csv("~/Documents/CCLE_LUSC/Resources/sample_info.csv", stringsAsFactors = FALSE)
+dim(sample_meta)
+sample_meta
+
+
+#identify specific cells that matched
+cellsOfInterest = read.csv("~/Documents/CCLE_LUSC/Resources/sample_info_NSCLC.csv", stringsAsFactors = FALSE, header = TRUE)
+head(cellsOfInterest)
+dim(cellsOfInterest) #60 x 29
+colnames(cellsOfInterest)
+
+```
+
+```{r organize df, echo=FALSE}
 
 #pull out only TP63 transcripts
 CCLEtranscript[1:5,1:5]
-#saw only uses depmap ID need to match to samples
-dim(CCLEtranscript)
       
 CCLEcolumn = colnames(CCLEtranscript) 
 #every column name is a geneID
 CCLEcolumnNumbers_forTP63 = grep("TP63", CCLEcolumn)
 CCLEcolumnNumbers_forTP63
-
+length(CCLEcolumnNumbers_forTP63) #14
 
 #add depmap # to columns wanted
 CCLEcolumnNumbers_forTP63
-CCLEcolumnNumbers_forTP63 <- c(1, CCLEcolumnNumbers)
-CCLEcolumnNumbers_forTP63
-length(CCLEcolumnNumbers_forTP63)
+CCLEcolumnNumbers_forTP63 <- c(1, CCLEcolumnNumbers_forTP63)
+length(CCLEcolumnNumbers_forTP63) #15
 #add column 1 for depmap id#
 
-#group TP63 identifiers 
-
-TP63transcriptsisoform_identifiers = read.csv("~/Documents/Rstudio/CCLE_sampleinfo/Transcripts_p63Ntermtype.csv", stringsAsFactors = FALSE)
-TP63transcriptsisoform_identifiers
 
 #separate into TA v deltaN vectors
 TAp63_isoforms = TP63transcriptsisoform_identifiers$Nterm %in% "TAp63"
+table(TAp63_isoforms) #8 false and 6 true
 TAp63_isoforms = subset(TP63transcriptsisoform_identifiers, TP63transcriptsisoform_identifiers$Nterm %in% "TAp63")
-TAp63_isoforms
-dim(TAp63_isoforms)
+TAp63_isoforms #note the Transcript.ID column starts with ENST and doesn't have any periods 
+dim(TAp63_isoforms) # 6 x 9
 TAp63_isoforms = TAp63_isoforms[,1]
 TAp63_isoforms
 
-deltaNp63_isoforms = subset(TP63transcriptsisoform_identifiers, TP63transcriptsisoform_identifiers$Nterm %in% "deltaNp63")
+deltaNp63_isoforms = subset(TP63transcriptsisoform_identifiers, TP63transcriptsisoform_identifiers$Nterm %in% "DNp63")
 deltaNp63_isoforms
-dim(deltaNp63_isoforms)
+dim(deltaNp63_isoforms) #8 x9
 deltaNp63_isoforms = deltaNp63_isoforms[,1]
 deltaNp63_isoforms
-
-
-#sample info
-sample_meta = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/sample_info.csv", stringsAsFactors = FALSE)
-dim(sample_meta)
-sample_meta[1:5,1:5]
 
 
 #pull out sample_meta file make mini df with depmapID and strippedcellname only
 sample_meta_names = sample_meta[,c(1,3)]
 sample_meta_names
-
+dim(sample_meta_names) #1804 x 2
 
 
 #replace CCLEtranscript depmap id to stripped cell line name for downstream labeling
 CCLEtranscript_CellsRelabel = CCLEtranscript
 
-# doesn't work because the lengths of the df are different  --- try to use dplyr
-#CCLEtranscript_CellsRelabel[CCLEtranscript_CellsRelabel$X == sample_meta$DepMap_ID] <- sample_meta$stripped_cell_line_name
-
-#all names match from CCLE to sample meta
 compare = table(CCLEtranscript_CellsRelabel$X %in% sample_meta$DepMap_ID)
-compare
+compare #1406 true
 compare = table(sample_meta$DepMap_ID %in% CCLEtranscript_CellsRelabel$X)
-compare
-# The sample meta has 434 that don't match the CCLE
+compare #434 false and 1406 true
 
+#rename depmapID with stripped cell name 
 CCLEtranscript_CellsRelabel[1:5,1:5]
-#given up on relabeling too large file, will relabel at end
-
+names(CCLEtranscript_CellsRelabel)[1] = "DepMap_ID"
+CCLEtranscript_CellsRelabel = left_join(CCLEtranscript_CellsRelabel, sample_meta_names, by = join_by(DepMap_ID))
+dim(CCLEtranscript_CellsRelabel) #1406 x 227664
+CCLEtranscript_CellsRelabel[1:5,227662:227664]
+CCLEtranscript_CellsRelabel = CCLEtranscript_CellsRelabel %>%
+    relocate(stripped_cell_line_name, .after = DepMap_ID)
+head(CCLEtranscript_CellsRelabel)
 ```
 
-```{r pressure, echo=FALSE}
-#RUN WHOLE BLOCK
+```{r subset lung cancer and TP63, echo=FALSE}
+CCLEtranscript_CellsRelabel[1:5, 1:5] #has depmadID then stripped cell name
+CCLEtranscript[1:5,1:5] #is by depmap id# under colname X
+CCLEtranscript_SCN = CCLEtranscript_CellsRelabel[,-1] #is just stripped cell name
+CCLEtranscript_SCN[1:5, 1:5]
 
-#identify specific cells that matched
-
-MatchedCells = cellsOfInterest %in% CCLEtranscript$X
-MatchedCells
-table(MatchedCells)
-
-notMatchedCells = !cellsOfInterest %in% CCLEtranscript$X
-notMatchedCells
-table(MatchedCells)
-
-#identify which cell lines were not matched
-cellsOfInterest[notMatchedCells]
-cellsOfInterest
+MatchedCells = cellsOfInterest$DepMap_ID %in% CCLEtranscript$X
+table(MatchedCells) #5 false 55 true
 
 #Move forward with only matched cells - note making a new table using subset function but with all gene transcripts from original
-MatchedCells = subset(CCLEtranscript, CCLEtranscript$X %in% cellsOfInterest)
-dim(MatchedCells)
+MatchedCells = subset(CCLEtranscript, CCLEtranscript_SCN$stripped_cell_line_name %in% cellsOfInterest$stripped_cell_line_name)
+dim(MatchedCells) #55 x 227663
 
 
-#make new table with only interested rows and columns
+#make new table with only interested rows (cell lines) and columns (TP63 transcripts)
 CCLEtable = MatchedCells[,CCLEcolumnNumbers_forTP63]
+head(CCLEtable) #DepMap ID first column under X
+dim(CCLEtable) #55x 15
+CCLEtable #col names start with TP63..ENST then end with a period, need to edit to match
+CCLEtable_colnames = colnames(CCLEtable) %>%
+    str_sub(start = 7, end = -2)
+
+
+CCLEtable_colnames #accidentally removed the first colname need to rename to DepMap_ID
+colnames(CCLEtable) = CCLEtable_colnames
+colnames(CCLEtable)[1] = "DepMap_ID"
 head(CCLEtable)
-dim(CCLEtable)
-CCLEtable
 
-```
+TP63transcriptsisoform_identifiers #use column Transcript.ID rows looks to match CCLETable names
+compare = TP63transcriptsisoform_identifiers$Transcript.ID %in% colnames(CCLEtable)
+table(compare) #all 14 TRUE
 
-
-
-
-```{r pressure, echo=FALSE}
-#RUN WHOLE BLOCK TO REORGANIZE CELL LINE NAMES TO FIRST COLUMN AND REMOVE DEPMAP ID#
-
-#check column names are cell type, then each TP63 isoform identifier
-CCLEtable_colnames = colnames(CCLEtable)
-CCLEtable_colnames
-
-compare = TP63transcriptsisoform_identifiers$Transcript.ID %in% CCLEtable_colnames
-compare
-#all match
-
-
-
-#rename depmapID to cell line names
-CCLEtable = left_join(CCLEtable, sample_meta_names, by = c("X" = "DepMap_ID"))
-CCLEtable
-
-#move cell line name first and remove X
-CCLEtable = CCLEtable %>%
-  select(stripped_cell_line_name, everything())
-
-CCLEtable_cells = CCLEtable[,-2]
-CCLEtable_cells
-
-```
-```{r pressure, echo=FALSE} 
-#DON'T DO THIS
-#sum expression levels based on TAp63 or deltaNp63 isoforms
-#won't allow to transpose then join .... will try to subset then combine into a data frame
-#LUSCtable_colnames = colnames(LUSCtable_cells)
-# = data.frame(LUSCtable_colnames)
-#LUSCtable_colnames
-#dim(LUSCtable_colnames)
-#colnames(LUSCtable_colnames)[1]="TP63"
-
-
-#join to label p63 isoform
-#LUSCtable_colnames = left_join(LUSCtable_colnames, TP63transcriptsisoform_identifiers, by = c("TP63" = "Transcript.ID"))
-#LUSCtable_colnames
-
-#remove original name and then put back into table as types
-#LUSCtable_cells_isoforms = LUSCtable_cells
-#LUSCtable_cells_isoforms
-
-
-#colnames(LUSCtable_cells_isoforms) = LUSCtable_colnames$Nterm
-
-#LUSCtable_cells_isoforms
-#have table with titles only TAp63 v deltaNp63 now need to sum and graph
-
-
-#sort_order = sort(colnames(LUSCtable_cells_isoforms))
-#LUSCtable_cells_isoforms = LUSCtable_cells_isoforms[,sort_order]
-#LUSCtable_cells_isoforms
-#this was really dumb - next time you can just order the isoform file by TAp63 and deltaNp63 or combine the two vectors you created for both and used that to order the columns so that it can retain the transcript information. This way you also lost your row names
 ```
 
 ```{r pressure, echo=FALSE}
-# run if you want bar plots of each cell line for TAp63 or deltaNp63 - need to edit titles and axis labels
 
+head(CCLEtable) #DepMap_ID is column 1
 
-#sum expression levels based on TAp63 or deltaNp63 isoforms
-#won't allow to transpose then join .... will try to subset then combine into a data frame
-CCLEtable
-colnames(CCLEtable)
-names(CCLEtable)[1] = "Cell_Line"
-names(CCLEtable)[2] = "DepMap_ID"
-CCLEtable
+deltaNp63_isoforms
+TAp63_isoforms
 
-length(deltaNp63_isoforms)
-#8
-length(TAp63_isoforms)
-#6
-
-sortorder = c("Cell_Line","DepMap_ID",TAp63_isoforms,deltaNp63_isoforms)
+sortorder = c("DepMap_ID",TAp63_isoforms,deltaNp63_isoforms)
 sortorder
+
 
 CCLEtable_isoforms = CCLEtable[,sortorder]
 CCLEtable_isoforms
 dim(CCLEtable_isoforms)
-# in correct order note that TAp63 are columns 3:8, and deltaNp63 are 9:16
+#55 x 15 in correct order note that TAp63 are columns 2:7, and deltaNp63 are 8:15
 
-TAp63_sum = rowSums(CCLEtable_isoforms[,c(3:8)], na.rm=TRUE)
-deltaNp63_sum = rowSums(CCLEtable_isoforms[,c(9:16)], na.rm = TRUE)
+TAp63_sum = rowSums(CCLEtable_isoforms[,c(2:7)], na.rm=TRUE)
+deltaNp63_sum = rowSums(CCLEtable_isoforms[,c(8:15)], na.rm = TRUE)
 
 CCLEtable_isoforms_avgs = data.frame(CCLEtable_isoforms[,1],
                                           TAp63_sum,
                                          deltaNp63_sum )
+colnames(CCLEtable_isoforms_avgs)[1]="DepMap_ID"
+CCLEtable_isoforms_avgs #need to add lung cancer type column 
+#use cellsOfInterest$lineage_sub_subtype
+cellsOfInterest
+cellsOfInterest_type = cellsOfInterest[,c("DepMap_ID", "stripped_cell_line_name", "lineage_sub_subtype")]
+cellsOfInterest_type
+cellsOfInterest_type = left_join(cellsOfInterest_type,CCLEtable_isoforms_avgs)
+cellsOfInterest_type #file containing cell info and lineage type and sums of TAp63 and DNp63
+write.csv(cellsOfInterest_type,file="~/Documents/CCLE_LUSC/Exports/EXPORT_Lung_p63isoformsCCLEdata.csv")
 
-CCLEtable_isoforms_avgs
-write.csv(CCLEtable_isoforms_avgs,file="EXPORT_LUAD_p63isoformsCCLEdata.csv")
+cellsOfInterest_type$lineage_sub_subtype == 'NSCLC_adenocarcinoma'
+p63isoforms_LUAD = subset(cellsOfInterest_type, cellsOfInterest_type$lineage_sub_subtype == 'NSCLC_adenocarcinoma')
+p63isoforms_LUAD
 
-
-
-
-
-
-
-
-
-#Also save this for future analysis 
-CCLEtable_LUAD = CCLEtable
-CCLEtable_isoforms_avgs_LUAD = CCLEtable_isoforms_avgs
-
-#make barplots for each TP63 isoform
-barplot(CCLEtable_isoforms_avgs$TAp63_sum, names = CCLEtable_isoforms_avgs$CCLEtable_isoforms...1., las = 2, main = "CCLE LUAD Cell lines - TAp63 Expression", ylab = "summed expected counts")
-
+cellsOfInterest_type$lineage_sub_subtype == 'NSCLC_squamous'
+p63isoforms_LUSC = subset(cellsOfInterest_type, cellsOfInterest_type$lineage_sub_subtype == 'NSCLC_squamous')
+p63isoforms_LUSC
 
 
-barplot(CCLEtable_isoforms_avgs$deltaNp63_sum, names = CCLEtable_isoforms_avgs$CCLEtable_isoforms...1., las = 2, main = "CCLE LUAD Cell lines - deltaNp63 Expression", ylab = "summed expected counts")
+cellsOfInterest_type$lineage_sub_subtype == 'NSCLC_adenosquamous'
+p63isoforms_LuAdSq = subset(cellsOfInterest_type, cellsOfInterest_type$lineage_sub_subtype == 'NSCLC_adenosquamous')
+p63isoforms_LuAdSq
+
+
+
+#make barplots for each TAp63 isoform
+barplot(p63isoforms_LUSC$TAp63_sum, names = p63isoforms_LUSC$stripped_cell_line_name, las = 2, main = "CCLE LUAD Cell lines - TAp63 Expression", ylab = "summed expected counts")
+
+barplot(p63isoforms_LUAD$TAp63_sum, names = p63isoforms_LUAD$stripped_cell_line_name, las = 2, main = "CCLE LUAD Cell lines - TAp63 Expression", ylab = "summed expected counts")
+#make font smaller because labeling out of spacing
+
+#make barplots for each DNp63 isoform
+barplot(p63isoforms_LUSC$deltaNp63_sum, names = p63isoforms_LUSC$stripped_cell_line_name, las = 2, main = "CCLE LUAD Cell lines - DNp63 Expression", ylab = "summed expected counts")
 
 
 ```
@@ -266,57 +216,25 @@ barplot(CCLEtable_isoforms_avgs$deltaNp63_sum, names = CCLEtable_isoforms_avgs$C
 #NEED TO EDIT TITLES
 
 #create a stacked bar chart
-CCLEtable_isoforms_avgs
-newcolnamesfor_t = CCLEtable_isoforms_avgs[,1]
-newcolnamesfor_t
+colnames(cellsOfInterest_type)
+cellsOfInterest_type_longer = pivot_longer(cellsOfInterest_type, cols = c('TAp63_sum','deltaNp63_sum'), names_to = 'p63_isoform', values_to = 'sums')
+cellsOfInterest_type_longer
 
-t_CCLEtable_isoforms_avgs = t(CCLEtable_isoforms_avgs)
-t_CCLEtable_isoforms_avgs[,1:5]
-t_CCLEtable_isoforms_avgs = t_CCLEtable_isoforms_avgs [2:3,]
-t_CCLEtable_isoforms_avgs[,1:5]
-colnames(t_CCLEtable_isoforms_avgs) = newcolnamesfor_t
-t_CCLEtable_isoforms_avgs
+p63isoforms_LUSC_longer = pivot_longer(p63isoforms_LUSC, cols = c('TAp63_sum','deltaNp63_sum'), names_to = 'p63_isoform', values_to = 'sums')
+p63isoforms_LUSC_longer
+p63isoforms_LUSC_longer = p63isoforms_LUSC_longer[,c(2,4,5)]
+p63isoforms_LUSC_longer
 
-barplot(t_CCLEtable_isoforms_avgs, las = 2, main = "CCLE LUAD Cell lines - TP63 Isoform Expression", ylab = "summed expected counts", legend.text = c("TAp63", "deltaNp63"))
-
-
-
-#create a stacked barchart normalized to 100%, https://statisticsglobe.com/scale-bars-of-stacked-barplot-to-100-percent-in-r
-#example didn't work
-#barplot(prop.table(t_LUSCtable_cells_isoforms_avgs, ))
-
-#need to transform the data manually first into percentages using base R https://r-graph-gallery.com/211-basic-grouped-or-stacked-barplot.html
-
-colnames(t_CCLEtable_isoforms_avgs)[1]="key"
-t_CCLEtable_isoforms_avgs
-
-CCLEtable_isoforms_avgs
-colnames(CCLEtable_isoforms_avgs) = c("cells","TAp63","deltaNp63")
-CCLEtable_isoforms_avgs
-#check for zeros in both columns
-CCLEtable_isoforms_avgs[20,]
-#yes zeros in both
-CCLEtable_isoforms_avgs = CCLEtable_isoforms_avgs[-20,]
-CCLEtable_isoforms_avgs
-
-
-CCLEtable_isoforms_avgs_long = CCLEtable_isoforms_avgs %>%
-    gather('TAp63', 'deltaNp63', key = 'cell type', value ='isoform')
-CCLEtable_isoforms_avgs_long
-#moved into a longer version of a dataframe
-colnames(CCLEtable_isoforms_avgs_long) = c("Cell_Line", "TP63_isoform", "Summed_Counts") 
-CCLEtable_isoforms_avgs_long
-#make stacked plot using ggplot
-stacked_summed = ggplot(CCLEtable_isoforms_avgs_long, aes(fill=TP63_isoform, y=Summed_Counts, x=Cell_Line)) + 
+stacked_summed = ggplot(p63isoforms_LUSC_longer, aes(fill=p63_isoform, y=sums, x=stripped_cell_line_name)) +
     geom_bar(position="stack", stat="identity") + 
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 stacked_summed
 
 
-data_percentage = CCLEtable_isoforms_avgs_long
+data_percentage = p63isoforms_LUSC_longer
 data_percentage = data_percentage %>%
-    group_by(cells) %>%
-    mutate(percent = 100*isoform/sum(isoform))
+    group_by(stripped_cell_line_name) %>%
+    mutate(percent = 100*sums/sum(sums))
 data_percentage
 colnames(data_percentage) = c("Cell_Line", "TP63_isoform", "Summed_Counts", "percent") 
 #concatenated another column for percentages
@@ -332,7 +250,7 @@ stacked
 
 ```
 
-# cells of interest from CCLE
+# Wilkerson Classifiers
 ```{r pressure, echo=FALSE}
 cellsOfInterest
 #currently looking at LUAD cells of interest
