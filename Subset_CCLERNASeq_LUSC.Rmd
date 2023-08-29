@@ -61,10 +61,6 @@ colnames(sample_meta)[colnames(sample_meta) == "Protein_Change"] <- "p53"
 
 
 
-#subtype using cellosauric_NCIt ... for Lung squamous cell carcinoma
-sample_meta_LUSC = subset(sample_meta, sample_meta$Cellosaurus_NCIt_disease == "Lung squamous cell carcinoma") #37 cell lines 
-
-write.csv(sample_meta_LUSC, file="~/Project_LUSC/RScripts_LUSC/Exports/sample_meta_LUSC.csv")
 
 ```
 
@@ -92,6 +88,15 @@ rownames(MatchedCellsTable) = MatchedCellsTable_names$stripped_cell_line_name
 
 
 write.csv(MatchedCellsTable, file="~/Project_LUSC/RScripts_LUSC/Exports/CCLE_RNAseq_reads_LUSC.csv")
+
+
+#subtype using cellosauric_NCIt ... for Lung squamous cell carcinoma, then subset for available RNAseq data
+sample_meta_LUSC = subset(sample_meta, sample_meta$Cellosaurus_NCIt_disease == "Lung squamous cell carcinoma") #37 cell lines 
+sample_meta_LUSC = subset(sample_meta_LUSC, sample_meta_LUSC$stripped_cell_line_name %in% row.names(MatchedCellsTable))
+
+write.csv(sample_meta_LUSC, file="~/Project_LUSC/RScripts_LUSC/Exports/sample_meta_LUSC.csv")
+
+
 ```
 
 
