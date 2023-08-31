@@ -27,14 +27,14 @@ getwd()
 ```{r pressure, echo=FALSE}
 
 #RNAseq_reads (RSEM) Rows: cell lines (Broad IDs) and Columns: genes (HGNC symbol and Ensembl ID)
-CCLE_RNAseq_reads = read.csv("~/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_RNAseq_reads.csv", header=TRUE, stringsAsFactors = FALSE, row.names = 1 )
+CCLE_RNAseq_reads = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_RNAseq_reads.csv", header=TRUE, stringsAsFactors = FALSE, row.names = 1 )
 
-sample_meta = read.csv("~/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/sample_info.csv", header = TRUE)
+sample_meta = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/sample_info.csv", header = TRUE)
 
-CCLEmutations = read.csv("~/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_mutations.csv", header = TRUE)
+CCLEmutations = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLEDownloads/CCLE_mutations.csv", header = TRUE)
 
 
-CCLEcelllines_classifiedbyWilkerson = read.csv("~/Project_LUSC/RScripts_LUSC/Resources/LUSCclassifers_WilkersonTable2.csv",header=TRUE, stringsAsFactors = FALSE)
+CCLEcelllines_classifiedbyWilkerson = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/LUSCclassifers_WilkersonTable2.csv",header=TRUE, stringsAsFactors = FALSE)
 
 
 ```
@@ -50,15 +50,15 @@ CCLEmutations_subset_tp53 = CCLEmutations_subset_tp53 %>%
   subset(Hugo_Symbol == "TP53") %>%
   subset(Protein_Change != "")
 #total of 1119 unique DepMap_IDs with TP53 protein mutations
-
-
-CCLEmutations_subset_tp53_df = CCLEmutations_subset_tp53[,c("DepMap_ID", "Protein_Change")]
+colnames(CCLEmutations_subset_tp53)[colnames(CCLEmutations_subset_tp53) == "Protein_Change"] <- "p53"
+CCLEmutations_subset_tp53_df = CCLEmutations_subset_tp53[,c("DepMap_ID", "p53")]
   
 sample_meta = left_join(sample_meta, CCLEmutations_subset_tp53_df)
-colnames(sample_meta)[colnames(sample_meta) == "Protein_Change"] <- "p53"
-
+cellIDS = sample_meta[,1:3]
 #sample_meta has all cell lines with p53 protein mutation information added
 
+#subtype using cellosauric_NCIt ... for Lung squamous cell carcinoma, then subset for available RNAseq data
+sample_meta_LUSC = subset(sample_meta, sample_meta$Cellosaurus_NCIt_disease == "Lung squamous cell carcinoma") #37 cell lines 
 
 
 
@@ -84,17 +84,17 @@ colnames(MatchedCellsTable) = CCLEtranscript_colnames
 MatchedCellsTable_names = data.frame(rownames(MatchedCellsTable))
 colnames(MatchedCellsTable_names) = "DepMap_ID"
 MatchedCellsTable_names =  left_join(MatchedCellsTable_names, cellIDS)
+MatchedCellsTable_names = distinct(MatchedCellsTable_names)
 rownames(MatchedCellsTable) = MatchedCellsTable_names$stripped_cell_line_name
 
 
-write.csv(MatchedCellsTable, file="~/Project_LUSC/RScripts_LUSC/Exports/CCLE_RNAseq_reads_LUSC.csv")
+#write.csv(MatchedCellsTable, file="~/Project_LUSC/RScripts_LUSC/Exports/CCLE_RNAseq_reads_LUSC.csv")
+
+sample_meta_LUSC = subset(sample_meta_LUSC, sample_meta_LUSC$stripped_cell_line_name %in% MatchedCellsTable_names$stripped_cell_line_name)
+sample_meta_LUSC <- sample_meta_LUSC[!duplicated(sample_meta_LUSC$DepMap_ID), ]
 
 
-#subtype using cellosauric_NCIt ... for Lung squamous cell carcinoma, then subset for available RNAseq data
-sample_meta_LUSC = subset(sample_meta, sample_meta$Cellosaurus_NCIt_disease == "Lung squamous cell carcinoma") #37 cell lines 
-sample_meta_LUSC = subset(sample_meta_LUSC, sample_meta_LUSC$stripped_cell_line_name %in% row.names(MatchedCellsTable))
-
-write.csv(sample_meta_LUSC, file="~/Project_LUSC/RScripts_LUSC/Exports/sample_meta_LUSC.csv")
+#write.csv(sample_meta_LUSC, file="~/Project_LUSC/RScripts_LUSC/Exports/sample_meta_LUSC.csv")
 
 
 ```
