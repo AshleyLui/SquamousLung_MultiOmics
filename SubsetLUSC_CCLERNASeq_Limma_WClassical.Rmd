@@ -1,0 +1,343 @@
+---
+title: "Subset_CCLERNASeq"
+author: "AL"
+date: "2023-08-29"
+output: html_document
+---
+
+#Load Libraries
+```{r setup, include=FALSE}
+#Load libraries and setwd
+library(here)
+library(readxl)
+library(stringr)
+library(ConsensusClusterPlus)
+library(ComplexHeatmap)
+library(circlize)
+library(enrichR)
+library(immunedeconv)
+library(ggplot2)
+library(iClusterPlus)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(limma)
+library(edgeR)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+set.seed(2022)
+
+getwd()
+```
+
+#Load subset RNASeq data
+```{r pressure, echo=FALSE}
+
+CCLE_RNAseq_reads_LUSC = read.csv(file="~/Documents/Project_LUSC/RScripts_LUSC/Resources/CCLE_RNAseq_reads_LUSC.csv", header = TRUE, row.names = 1)
+
+CCLEcelllines_classifiedbyWilkerson = read.csv("~/Documents/Project_LUSC/RScripts_LUSC/Resources/LUSCclassifers_WilkersonTable2.csv",header=TRUE, stringsAsFactors = FALSE)
+
+sample_meta_LUSCsubtyped = read.csv(file = "~/Documents/Project_LUSC/RScripts_LUSC/Resources/sample_meta_LUSCsubtyped.csv", header = TRUE)
+#Wilkerson predicted subtypes
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+
+
+#rename wilkerson subtypes from our predicted and wilkerson paper
+```{r}
+#Spredicted is our predictions with SClassical being classical or not
+colnames(sample_meta_LUSCsubtyped)[colnames(sample_meta_LUSCsubtyped) == "wilkerson_classifier"] = "SPredicted"
+
+SPredicted_df = data.frame(sample_meta_LUSCsubtyped[, c("DepMap_ID","SPredicted")])
+SClassical = SPredicted_df$SPredicted == "classical"
+SPredicted_df$SClassical = SClassical
+SPredicted_df = SPredicted_df[,-2]
+sample_meta_LUSCsubtyped = left_join(sample_meta_LUSCsubtyped, SPredicted_df)
+
+colnames(CCLEcelllines_classifiedbyWilkerson)[colnames(CCLEcelllines_classifiedbyWilkerson) == "Cell.line"] = "cell_line_name"
+
+#add columns for classical or not by wilkerson paper (WPredicted and WClassical)
+WPredicted_df = data.frame(CCLEcelllines_classifiedbyWilkerson[, c("cell_line_name","Predicted")])
+colnames(WPredicted_df)[colnames(WPredicted_df) == "Predicted"] = "WPredicted"
+WClassical = WPredicted_df$WPredicted == "Classical"
+WPredicted_df$WClassical = WClassical
+sample_meta_LUSCsubtyped = left_join(sample_meta_LUSCsubtyped, WPredicted_df)
+
+
+#only 4 match up by SPredicted and WPredicted -- how to code this? 7 ludlu-1, 16 hcc-2814, 18 lc-1f, 23 hcc15
+```
+
+#!! VOOM does't work with na under WClassical
+```{r}
+#identify and delete cell lines now identified with WClassical in sample_meta_LUSCsubtype
+WClass_isNA = is.na(sample_meta_LUSCsubtyped$WClassical)
+WClass_isNA_names = sample_meta_LUSCsubtyped$stripped_cell_line_name[WClass_isNA]
+
+sample_meta_LUSC_WClass <- sample_meta_LUSCsubtyped[!is.na(sample_meta_LUSCsubtyped$WClassical), ]
+
+#remove the cells identified above from counts
+CCLE_RNAseq_reads_LUSC_WClass = CCLE_RNAseq_reads_LUSC
+CCLE_RNAseq_reads_LUSC_WClass = subset(CCLE_RNAseq_reads_LUSC_WClass, row.names(CCLE_RNAseq_reads_LUSC_WClass) %in% sample_meta_LUSC_WClass$stripped_cell_line_name)
+```
+
+#CCLE_RNAseq_reads data
+```{r}
+hist(apply(CCLE_RNAseq_reads_LUSC_WClass,1, max))
+#counts should be in the thousands to millions - SO GOOD
+
+
+counts = t(CCLE_RNAseq_reads_LUSC_WClass) #transform so genes are row names and cells are column
+dim(counts) #54357 21
+
+counts_na = counts
+counts_na[counts_na == 0] = NA
+boxplot(log2(counts_na)) #median looks about the same across- likely normalized
+```
+
+
+
+#put into DGEList
+```{r}
+
+DGELUSC_CCLE = DGEList(counts, lib.size = colSums(counts), 
+        norm.factors = rep(1,ncol(counts)), samples = NULL, group =
+          colnames(counts), genes = NULL, remove.zeros = FALSE)
+
+DGE_samples_group= DGELUSC_CCLE$samples$group
+DGE_samples_group = data.frame(DGE_samples_group)
+
+colnames(DGE_samples_group)[1] = "stripped_cell_line_name" 
+DGE_samples_group = left_join(DGE_samples_group, sample_meta_LUSCsubtyped)
+
+
+#add group descriptor to the list
+DGELUSC_CCLE$samples$WPredicted = DGE_samples_group$WPredicted
+DGELUSC_CCLE$samples$WClassical = DGE_samples_group$WClassical
+DGELUSC_CCLE$samples$SPredicted = DGE_samples_group$SPredicted
+DGELUSC_CCLE$samples$SClassical = DGE_samples_group$SClassical
+DGELUSC_CCLE$samples$PrimaryMetastatic = DGE_samples_group$primary_or_metastasis
+DGELUSC_CCLE$samples$sex = DGE_samples_group$sex
+DGELUSC_CCLE$samples$p53 = DGE_samples_group$p53
+
+
+
+```
+
+
+```{r, echo = FALSE}
+# TMM normalization
+
+DGELUSC_CCLE = calcNormFactors(DGELUSC_CCLE, method = "TMM")
+DGELUSC_CCLE
+
+
+#remove lowly expresssed genes
+table(rowSums(DGELUSC_CCLE$counts==0)==9)
+# FALSE 53686 and  TRUE 671 
+
+keep.exprs <- filterByExpr(DGELUSC_CCLE, group=DGELUSC_CCLE$samples$WClassical)
+table(keep.exprs) #false 32427  and true 21930 
+
+DGELUSC_CCLE_filtered <- DGELUSC_CCLE[keep.exprs,, keep.lib.sizes=FALSE]
+ #21930     x 28
+
+```
+
+
+
+```{r, echo = FALSE}
+#group design
+DGELUSC_CCLE
+DGELUSC_CCLE$samples
+DGELUSC_CCLE$samples$WClassical
+
+
+DGELUSC_CCLE$design = model.matrix(~DGELUSC_CCLE$samples$WClassical)
+DGELUSC_CCLE
+
+
+```
+
+#Voom differential expression using Limma
+
+```{r, echo = FALSE, fig.width = 6, fig.height = 4}
+DGELUSC_CCLE_voomed = voom(DGELUSC_CCLE, design = DGELUSC_CCLE$design, plot = TRUE)
+
+library(ggbiplot)
+rnaseq_pca = prcomp(t(DGELUSC_CCLE_voomed$E), center = TRUE, scale = TRUE)
+head(rnaseq_pca)
+
+labels = colnames(rnaseq_pca$sd)
+rnaseq_pca$x
+
+
+ggbiplot(rnaseq_pca, obs.scale = 1, var.scale = 1, labels = rownames(rnaseq_pca$x),
+         ellipse = FALSE, circle = TRUE, var.axes = FALSE, groups = DGELUSC_CCLE$samples$WClassical) +
+    geom_point(aes(color = DGELUSC_CCLE$samples$WClassical), size = 2, alpha = 0.5)
+    scale_color_discrete(name = '') 
+    #theme(legend.direction = 'horizontal', legend.position = 'top')
+    
+#also grouping by adenosquamous, metastasis vs primary, etc - change to cell line name upstream instead of DepMap_ID
+
+
+```
+
+
+#Voom fit generate Bayes table
+```{r, echo = FALSE}
+#This analysis is by SClassical
+
+DGELUSC_CCLE_voomed_vfit = lmFit(DGELUSC_CCLE_voomed, DGELUSC_CCLE_voomed$design)
+DGELUSC_CCLE_voomed_efit = eBayes(DGELUSC_CCLE_voomed_vfit)
+DGELUSC_CCLE_ebayes_results_table = topTable(DGELUSC_CCLE_voomed_efit, number = nrow(DGELUSC_CCLE_voomed$E), coef = 2)
+
+
+#write.csv(DGELUSC_CCLE_ebayes_results_table, "~/Project_LUSC/RScripts_LUSC/Exports/DGELUSC_CCLE_ebayes_results_table.csv")
+#nrow(subset(ovyrs_group_ebayes_results_table, adj.P.Val <= 0.1))
+
+
+#look at adj.P.Val <0.05 -- goal is dozens to hundreds of genes
+# put into enrichR then 
+
+
+hist = hist(DGELUSC_CCLE_ebayes_results_table$P.Value, breaks = 25, xlab = "P-value", main = "",  ylab = "Frequency")
+```
+
+
+#Top limma results; p-value distribution
+
+```{r, echo = FALSE}
+
+DGELUSC_CCLE_ebayes_results_table = DGELUSC_CCLE_ebayes_results_table %>%
+  mutate(gene_type = case_when(logFC >= 2 & adj.P.Val <= 0.05 ~ "up",
+                               logFC <= 0.5 & adj.P.Val <= 0.05 ~ "down",
+                               TRUE ~ "ns"))
+
+#dim(subset(DGELUSC_CCLE_ebayes_results_table, logFC <= -1  & adj.P.Val <= 0.05)) #0 by 7
+
+#try to make more stringent
+CCLE_sig_down = subset(subset(DGELUSC_CCLE_ebayes_results_table, logFC <= -2  & adj.P.Val <= 0.05)) #21 genes
+CCLE_sig_down10 = CCLE_sig_down[1:10, ]
+
+CCLE_sig_up = subset(subset(DGELUSC_CCLE_ebayes_results_table, logFC >= 2  & adj.P.Val <= 0.05)) #29 genes
+CCLE_sig_up10 = CCLE_sig_up[1:10,]
+
+#try to label sig genes
+AllSigGenes = rbind(CCLE_sig_up, CCLE_sig_down) #50 top 
+AllSigGenes20 = rbind(CCLE_sig_up10, CCLE_sig_down10)
+
+#paste0(row.names(subset(DGELUSC_CCLE_ebayes_results_table, logFC >= 1  & adj.P.Val <= 0.05)), collapse = ",")
+
+```
+
+
+#Volcano Plot
+```{r}
+
+plot(DGELUSC_CCLE_ebayes_results_table$logFC, -log10(DGELUSC_CCLE_ebayes_results_table$P.Value))
+
+#generate group and colors for up and down sig genes
+
+library(ggrepel)
+cols <- c("up" = "#ffad73", "down" = "#26b3ff", "ns" = "grey") 
+sizes <- c("up" = 2, "down" = 2, "ns" = 1) 
+alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
+
+ggplot(data = DGELUSC_CCLE_ebayes_results_table,
+       aes(x = logFC,
+           y = -log10(adj.P.Val))) + 
+  geom_point(aes(colour = gene_type), 
+             alpha = 0.2, 
+             shape = 16,
+             size = 1) + 
+  geom_point(data = CCLE_sig_up,
+             shape = 21,
+             size = 2, 
+             fill = "firebrick", 
+             colour = "black") + 
+  geom_point(data = CCLE_sig_down,
+             shape = 21,
+             size = 2, 
+             fill = "steelblue", 
+             colour = "black") + 
+  geom_hline(yintercept = -log10(0.05),
+             linetype = "dashed") + 
+  geom_vline(xintercept = c(log2(0.5), log2(2)),
+             linetype = "dashed") +
+  geom_text_repel (data = AllSigGenes, 
+                   mapping = aes(label = row.names(AllSigGenes)),
+                   force = 2,
+                   nudge_y = 1) +
+  scale_colour_manual(values = cols) + 
+  scale_x_continuous(breaks = c(seq(-10, 10, 2)),     
+                     limits = c(-10, 10))  
+
+
+```
+
+
+#Heatmap
+```{r}
+DGELUSC_CCLE_heatmap_genes = subset(DGELUSC_CCLE_ebayes_results_table, adj.P.Val <= 0.05)
+
+DGELUSC_CCLE_heatmap_df = DGELUSC_CCLE_voomed$E[row.names(DGELUSC_CCLE_heatmap_genes), ]
+
+DGELUSC_CCLE_heatmap_df_transform = as.matrix(t(scale(t(DGELUSC_CCLE_heatmap_df), scale = TRUE, center = TRUE)))
+
+gene_heatmap = Heatmap(DGELUSC_CCLE_heatmap_df_transform, cluster_columns = TRUE, cluster_rows = TRUE, row_title = "Gene Expression", column_title = "CCLE Cell lines", name = "Z-score", heatmap_legend_param = list(title_position = "topcenter", legend_direction = "vertical"), show_row_names = FALSE, row_names_gp = gpar(fontsize = 8), show_column_names = TRUE)
+
+gene_heatmap
+
+```
+
+#Heatmap with significant hits 
+
+```{r, echo = FALSE, fig.width = 10, fig.height = 6, warning = FALSE, message = FALSE}
+
+DGELUSC_CCLE_heatmap_df_TOP = DGELUSC_CCLE_voomed$E[row.names(AllSigGenes), ]
+
+DGELUSC_CCLE_heatmap_df_TOP_transform = as.matrix(t(scale(t(DGELUSC_CCLE_heatmap_df_TOP), scale = TRUE, center = TRUE)))
+
+gene_heatmap = Heatmap(DGELUSC_CCLE_heatmap_df_TOP_transform, cluster_columns = TRUE, cluster_rows = TRUE, row_title = "Gene Expression", column_title = "CCLE Cell lines", name = "Z-score", heatmap_legend_param = list(title_position = "topcenter", legend_direction = "vertical"), show_row_names = TRUE, row_names_gp = gpar(fontsize = 8), show_column_names = TRUE)
+gene_heatmap
+
+```
+
+
+#Heatmap with 20 (10 top up and 10 top down) significant hits 
+
+```{r, echo = FALSE, fig.width = 10, fig.height = 6, warning = FALSE, message = FALSE}
+
+DGELUSC_CCLE_heatmap_df_TOP = DGELUSC_CCLE_voomed$E[row.names(AllSigGenes20), ]
+
+DGELUSC_CCLE_heatmap_df_TOP_transform = as.matrix(t(scale(t(DGELUSC_CCLE_heatmap_df_TOP), scale = TRUE, center = TRUE)))
+
+gene_heatmap = Heatmap(DGELUSC_CCLE_heatmap_df_TOP_transform, cluster_columns = TRUE, cluster_rows = TRUE, row_title = "Gene Expression", column_title = "CCLE Cell lines", name = "Z-score", heatmap_legend_param = list(title_position = "topcenter", legend_direction = "vertical"), show_row_names = TRUE, row_names_gp = gpar(fontsize = 8), show_column_names = TRUE)
+gene_heatmap
+
+```
+
+
+#HAVENT DONE Plots of top hits if they exist
+
+```{r, echo = FALSE, include = FALSE}
+DGELUSC_CCLE_top_hits = DGELUSC_CCLE_ebayes_results_table[row.names(AllSigGenes), ]
+
+DGELUSC_CCLE_top_hits = DGELUSC_CCLE_voomed$E[row.names(DGELUSC_CCLE_top_hits), ]
+
+par(mfrow = c(2,3))
+for (i in 1:nrow(DGELUSC_CCLE_top_hits)) {
+  boxplot(row.names(DGELUSC_CCLE_top_hits)[i])
+          }
+
+boxplot(list(quartile1 = DGELUSC_CCLE_top_hits[row.names(DGELUSC_CCLE_top_hits)[i], quartile1_patients], quartile2 = DGELUSC_CCLE_top_hits[row.names(DGELUSC_CCLE_top_hits)[i], quartile2_patients], quartile3 = DGELUSC_CCLE_top_hits[row.names(DGELUSC_CCLE_top_hits)[i], quartile3_patients], quartile4 = DGELUSC_CCLE_top_hits[row.names(DGELUSC_CCLE_top_hits)[i], quartile4_patients]), ylab = "Normalized Expression", main = row.names(DGELUSC_CCLE_top_hits)[i], names = c("Q1", "Q2", "Q3", "Q4"))
+
+```
+
